@@ -1,0 +1,367 @@
+import { describe, expect, test } from 'bun:test'
+import { Router } from '../../../src/routing/router'
+import type { ContextHandler } from '../../../src'
+import { HttpMethodEnum } from '../../../src/types/method'
+
+const createRouter = (): Router => new Router()
+
+const createHandler = (): ContextHandler => (() => new Response('OK')) as ContextHandler
+
+describe('Router', () => {
+  describe('register()', () => {
+    test('should register a route and return the router instance', () => {
+      const router = createRouter()
+      const handler = createHandler()
+
+      expect(router.register(HttpMethodEnum.GET, '/users', handler)).toBe(router)
+
+      expect(router.match('GET', '/users')).toEqual({
+        handler,
+        params: {},
+      })
+    })
+
+    test('should register routes with different HTTP methods', () => {
+      const router = createRouter()
+      const getHandler = createHandler()
+      const postHandler = createHandler()
+
+      router.register(HttpMethodEnum.GET, '/users', getHandler)
+      router.register(HttpMethodEnum.POST, '/users', postHandler)
+
+      expect(router.match('GET', '/users')?.handler).toBe(getHandler)
+      expect(router.match('POST', '/users')?.handler).toBe(postHandler)
+    })
+
+    test('should throw when registering a duplicate route', () => {
+      const router = createRouter()
+
+      router.register(HttpMethodEnum.GET, '/users', createHandler())
+
+      expect(() => router.register(HttpMethodEnum.GET, '/users', createHandler())).toThrow(
+        'Route "GET /users" is already registered.',
+      )
+    })
+
+    test('should treat paths that normalize to the same route as duplicates', () => {
+      const router = createRouter()
+
+      router.register(HttpMethodEnum.GET, '/users', createHandler())
+
+      expect(() => router.register(HttpMethodEnum.GET, '//users//', createHandler())).toThrow(
+        'Route "GET /users" is already registered.',
+      )
+    })
+
+    test('should allow the same path with different methods', () => {
+      const router = createRouter()
+
+      expect(() => {
+        router.register(HttpMethodEnum.GET, '/users', createHandler())
+        router.register(HttpMethodEnum.DELETE, '/users', createHandler())
+      }).not.toThrow()
+    })
+
+    test('should register multiple dynamic routes', () => {
+      const router = createRouter()
+      const userHandler = createHandler()
+      const postHandler = createHandler()
+
+      router.register(HttpMethodEnum.GET, '/users/:id', userHandler)
+      router.register(HttpMethodEnum.GET, '/posts/:id', postHandler)
+
+      expect(router.match('GET', '/users/1')?.handler).toBe(userHandler)
+      expect(router.match('GET', '/posts/1')?.handler).toBe(postHandler)
+    })
+  })
+
+  describe('match()', () => {
+    test('should match a static route', () => {
+      const router = createRouter()
+      const handler = createHandler()
+
+      router.register(HttpMethodEnum.GET, '/products', handler)
+
+      expect(router.match('GET', '/products')).toEqual({
+        handler,
+        params: {},
+      })
+    })
+
+    test('should return undefined when the route does not exist', () => {
+      const router = createRouter()
+
+      router.register(HttpMethodEnum.GET, '/products', createHandler())
+
+      expect(router.match('GET', '/users')).toBeUndefined()
+    })
+
+    test('should return undefined for an unsupported method', () => {
+      const router = createRouter()
+
+      router.register(HttpMethodEnum.GET, '/products', createHandler())
+
+      expect(router.match('DELETE', '/products')).toBeUndefined()
+    })
+
+    test('should match a route with one dynamic parameter', () => {
+      const router = createRouter()
+      const handler = createHandler()
+
+      router.register(HttpMethodEnum.GET, '/users/:id', handler)
+
+      expect(router.match('GET', '/users/42')).toEqual({
+        handler,
+        params: { id: '42' },
+      })
+    })
+
+    test('should match multiple dynamic parameters', () => {
+      const router = createRouter()
+      const handler = createHandler()
+
+      router.register(HttpMethodEnum.GET, '/users/:userId/posts/:postId', handler)
+
+      expect(router.match('GET', '/users/10/posts/25')).toEqual({
+        handler,
+        params: {
+          userId: '10',
+          postId: '25',
+        },
+      })
+    })
+
+    test('should not match when the number of path segments differs', () => {
+      const router = createRouter()
+
+      router.register(HttpMethodEnum.GET, '/users/:id', createHandler())
+
+      expect(router.match('GET', '/users')).toBeUndefined()
+      expect(router.match('GET', '/users/42/posts')).toBeUndefined()
+    })
+
+    test('should not treat static segments as dynamic parameters', () => {
+      const router = createRouter()
+
+      router.register(HttpMethodEnum.GET, '/users/profile', createHandler())
+
+      expect(router.match('GET', '/users/123')).toBeUndefined()
+    })
+
+    test('should decode URL-encoded parameters', () => {
+      const router = createRouter()
+      const handler = createHandler()
+
+      router.register(HttpMethodEnum.GET, '/users/:name', handler)
+
+      expect(router.match('GET', '/users/Zen%20Allah')).toEqual({
+        handler,
+        params: { name: 'Zen Allah' },
+      })
+    })
+
+    test('should decode encoded special characters', () => {
+      const router = createRouter()
+      const handler = createHandler()
+
+      router.register(HttpMethodEnum.GET, '/search/:query', handler)
+
+      expect(router.match('GET', '/search/hello%2Bworld')).toEqual({
+        handler,
+        params: { query: 'hello+world' },
+      })
+    })
+
+    test('should return undefined for malformed URL encoding', () => {
+      const router = createRouter()
+
+      router.register(HttpMethodEnum.GET, '/users/:id', createHandler())
+
+      expect(router.match('GET', '/users/%E0%A4%A')).toBeUndefined()
+      expect(router.match('GET', '/users/%ZZ')).toBeUndefined()
+    })
+
+    test('should prefer a static route over a dynamic route', () => {
+      const router = createRouter()
+      const dynamicHandler = createHandler()
+      const staticHandler = createHandler()
+
+      router.register(HttpMethodEnum.GET, '/users/:id', dynamicHandler)
+      router.register(HttpMethodEnum.GET, '/users/me', staticHandler)
+
+      expect(router.match('GET', '/users/me')).toEqual({
+        handler: staticHandler,
+        params: {},
+      })
+    })
+
+    test('should match the dynamic route when no static route matches', () => {
+      const router = createRouter()
+      const dynamicHandler = createHandler()
+      const staticHandler = createHandler()
+
+      router.register(HttpMethodEnum.GET, '/users/:id', dynamicHandler)
+      router.register(HttpMethodEnum.GET, '/users/me', staticHandler)
+
+      expect(router.match('GET', '/users/123')).toEqual({
+        handler: dynamicHandler,
+        params: { id: '123' },
+      })
+    })
+
+    test('should prioritize more specific dynamic routes', () => {
+      const router = createRouter()
+      const generalHandler = createHandler()
+      const specificHandler = createHandler()
+
+      router.register(HttpMethodEnum.GET, '/users/:id/posts/:postId', generalHandler)
+
+      router.register(HttpMethodEnum.GET, '/users/:id/posts/latest', specificHandler)
+
+      expect(router.match('GET', '/users/10/posts/latest')?.handler).toBe(specificHandler)
+    })
+
+    test('should prioritize static segments at earlier positions', () => {
+      const router = createRouter()
+      const dynamicHandler = createHandler()
+      const specificHandler = createHandler()
+
+      router.register(HttpMethodEnum.GET, '/:category/products/:id', dynamicHandler)
+
+      router.register(HttpMethodEnum.GET, '/users/products/:id', specificHandler)
+
+      expect(router.match('GET', '/users/products/123')?.handler).toBe(specificHandler)
+    })
+
+    test('should match the root route', () => {
+      const router = createRouter()
+      const handler = createHandler()
+
+      router.register(HttpMethodEnum.GET, '/', handler)
+
+      expect(router.match('GET', '/')).toEqual({
+        handler,
+        params: {},
+      })
+    })
+
+    test('should treat trailing slashes as equivalent', () => {
+      const router = createRouter()
+      const handler = createHandler()
+
+      router.register(HttpMethodEnum.GET, '/users/', handler)
+
+      expect(router.match('GET', '/users')).toEqual({
+        handler,
+        params: {},
+      })
+
+      expect(router.match('GET', '/users/')).toEqual({
+        handler,
+        params: {},
+      })
+    })
+
+    test('should ignore repeated slashes in the request path', () => {
+      const router = createRouter()
+      const handler = createHandler()
+
+      router.register(HttpMethodEnum.GET, '/users/:id', handler)
+
+      expect(router.match('GET', '//users//42//')).toEqual({
+        handler,
+        params: { id: '42' },
+      })
+    })
+
+    test('should ignore repeated slashes in the registered path', () => {
+      const router = createRouter()
+      const handler = createHandler()
+
+      router.register(HttpMethodEnum.GET, '//users//:id//', handler)
+
+      expect(router.match('GET', '/users/42')).toEqual({
+        handler,
+        params: { id: '42' },
+      })
+    })
+
+    test('should match only the exact HTTP method casing', () => {
+      const router = createRouter()
+
+      router.register(HttpMethodEnum.GET, '/users', createHandler())
+
+      expect(router.match('get', '/users')).toBeUndefined()
+      expect(router.match('Get', '/users')).toBeUndefined()
+    })
+
+    test('should keep routes isolated by HTTP method', () => {
+      const router = createRouter()
+      const getHandler = createHandler()
+      const postHandler = createHandler()
+
+      router.register(HttpMethodEnum.GET, '/users/:id', getHandler)
+      router.register(HttpMethodEnum.POST, '/users/:id', postHandler)
+
+      expect(router.match('GET', '/users/1')?.handler).toBe(getHandler)
+      expect(router.match('POST', '/users/1')?.handler).toBe(postHandler)
+    })
+  })
+
+  describe('allowedMethods()', () => {
+    test('should return the methods registered for a path', () => {
+      const router = createRouter()
+
+      router.register(HttpMethodEnum.GET, '/users', createHandler())
+      router.register(HttpMethodEnum.POST, '/users', createHandler())
+      router.register(HttpMethodEnum.DELETE, '/users', createHandler())
+
+      expect(router.allowedMethods('/users')).toEqual([
+        HttpMethodEnum.GET,
+        HttpMethodEnum.POST,
+        HttpMethodEnum.DELETE,
+      ])
+    })
+
+    test('should return an empty array when no methods are registered', () => {
+      const router = createRouter()
+
+      expect(router.allowedMethods('/missing')).toEqual([])
+    })
+
+    test('should return only methods registered for the exact path', () => {
+      const router = createRouter()
+
+      router.register(HttpMethodEnum.GET, '/users', createHandler())
+      router.register(HttpMethodEnum.POST, '/users/:id', createHandler())
+
+      expect(router.allowedMethods('/users')).toEqual([HttpMethodEnum.GET])
+    })
+
+    test('should return methods in the configured order', () => {
+      const router = createRouter()
+
+      router.register(HttpMethodEnum.DELETE, '/products', createHandler())
+      router.register(HttpMethodEnum.PATCH, '/products', createHandler())
+      router.register(HttpMethodEnum.GET, '/products', createHandler())
+      router.register(HttpMethodEnum.PUT, '/products', createHandler())
+      router.register(HttpMethodEnum.POST, '/products', createHandler())
+
+      expect(router.allowedMethods('/products')).toEqual([
+        HttpMethodEnum.GET,
+        HttpMethodEnum.POST,
+        HttpMethodEnum.PUT,
+        HttpMethodEnum.PATCH,
+        HttpMethodEnum.DELETE,
+      ])
+    })
+    test('should treat trailing slashes as equivalent in allowedMethods', () => {
+      const router = createRouter()
+
+      router.register(HttpMethodEnum.GET, '/users/', createHandler())
+
+      expect(router.allowedMethods('/users/')).toEqual([HttpMethodEnum.GET])
+      expect(router.allowedMethods('/users')).toEqual([HttpMethodEnum.GET])
+    })
+  })
+})
