@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Test (Bun ${{ matrix.bun-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        bun-version: ['1.4.4']
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ matrix.bun-version }}
+
+      - name: Install dependencies (root)
+        run: bun install --frozen-lockfile
+
+      - name: Test (root)
+        run: bun test ./test
+
+      - name: Test (@ventjs/cookie)
+        if: ${{ !cancelled() }}
+        working-directory: packages/cookie
+        run: |
+          bun install --frozen-lockfile
+          bun test
+
+      - name: Test (@ventjs/jwt)
+        if: ${{ !cancelled() }}
+        working-directory: packages/jwt
+        run: |
+          bun install --frozen-lockfile
+          bun test
+
+      - name: Test @ventjs/cloudinary)
+        if: ${{ !cancelled() }}
+        working-directory: packages/cloudinary
+        run: |
+          bun install --frozen-lockfile
+          bun test
